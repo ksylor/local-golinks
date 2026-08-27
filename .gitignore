@@ -1,0 +1,8 @@
+# Your personal link store (seeded from links.example.json on install)
+links.json
+
+# Runtime log
+golinks.log
+
+# macOS
+.DS_Store

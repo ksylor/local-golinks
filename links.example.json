@@ -1,0 +1,5 @@
+{
+  "cal": "https://calendar.google.com",
+  "mail": "https://mail.google.com",
+  "search": "https://www.google.com/search?q=%s"
+}
