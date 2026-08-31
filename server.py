@@ -38,7 +38,43 @@ PORT = int(os.environ.get("GOLINKS_PORT", "80"))
 # Shortcuts that are reserved for the app itself and cannot be used as links.
 RESERVED = {"", "_edit", "_add", "_delete", "_api", "favicon.ico", "robots.txt"}
 
+# Hostnames this server will answer to. Anything else (e.g. an attacker's
+# domain rebinding to 127.0.0.1) is refused, to blunt DNS-rebinding attacks.
+ALLOWED_HOSTS = {"go", "localhost", "127.0.0.1", HOST}
+
+# Schemes a stored link may use. Blocks javascript:/data: and similar.
+ALLOWED_SCHEMES = ("http", "https", "mailto", "ftp")
+
+# Explicitly dangerous schemes: never prepend a default scheme to these, so
+# they fail validation instead of being silently rewritten into junk URLs.
+DANGEROUS_SCHEMES = ("javascript", "data", "vbscript", "file", "blob")
+
 _lock = threading.Lock()
+
+
+def has_control_chars(s):
+    return any(ord(c) < 0x20 or ord(c) == 0x7F for c in s)
+
+
+def normalize_target(url):
+    """Add a default scheme to a bare host, leaving valid schemes/paths alone."""
+    if url.startswith("/"):
+        return url
+    scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+    if scheme in ALLOWED_SCHEMES or scheme in DANGEROUS_SCHEMES:
+        return url
+    # No usable scheme (bare host, or host:port) -> assume https.
+    return "https://" + url
+
+
+def valid_target(url):
+    """A storable redirect target: no control chars, allowed scheme or root-relative."""
+    if not url or has_control_chars(url):
+        return False
+    if url.startswith("/"):
+        return True
+    scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+    return scheme in ALLOWED_SCHEMES
 
 
 def load_links():
@@ -226,6 +262,24 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("golinks: %s - %s\n" % (self.address_string(), fmt % args))
 
+    def _host_ok(self):
+        """Reject requests whose Host isn't one we recognize (DNS-rebinding guard)."""
+        host = self.headers.get("Host", "")
+        hostname = host.rsplit(":", 1)[0] if host else ""
+        return hostname in ALLOWED_HOSTS
+
+    def _same_origin(self):
+        """Block cross-site state changes (CSRF). Non-browser clients (no
+        Origin/Referer/Sec-Fetch-Site) are allowed; browsers always send at
+        least Sec-Fetch-Site on modern versions."""
+        site = self.headers.get("Sec-Fetch-Site")
+        if site is not None:
+            return site in ("same-origin", "same-site", "none")
+        src = self.headers.get("Origin") or self.headers.get("Referer")
+        if not src:
+            return True
+        return urlparse(src).hostname in ALLOWED_HOSTS
+
     def _send_html(self, body, status=HTTPStatus.OK):
         data = body.encode("utf-8")
         self.send_response(status)
@@ -242,6 +296,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if not self._host_ok():
+            self.send_error(HTTPStatus.FORBIDDEN, "Invalid Host header")
+            return
+
         parsed = urlparse(self.path)
         path = parsed.path
         first = path.strip("/").split("/")[0]
@@ -295,6 +353,11 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.query and "%s" not in target:
                 sep = "&" if "?" in target else "?"
                 target = target + sep + parsed.query
+            # Refuse to emit a Location built from a tampered/hand-edited entry
+            # containing control chars (HTTP response-splitting guard).
+            if has_control_chars(target):
+                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Invalid redirect target")
+                return
             self._redirect(target)
             return
 
@@ -308,6 +371,13 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self):
+        if not self._host_ok():
+            self.send_error(HTTPStatus.FORBIDDEN, "Invalid Host header")
+            return
+        if not self._same_origin():
+            self.send_error(HTTPStatus.FORBIDDEN, "Cross-origin request blocked")
+            return
+
         parsed = urlparse(self.path)
         first = parsed.path.strip("/").split("/")[0]
         length = int(self.headers.get("Content-Length", "0") or "0")
@@ -330,8 +400,18 @@ class Handler(BaseHTTPRequestHandler):
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return
-            if "://" not in url and not url.startswith("/"):
-                url = "https://" + url
+            url = normalize_target(url)
+            if not valid_target(url):
+                self._send_html(
+                    render_edit(
+                        key,
+                        url,
+                        "That URL isn't allowed — use http/https/mailto/ftp and no control characters.",
+                        orig=orig,
+                    ),
+                    status=HTTPStatus.BAD_REQUEST,
+                )
+                return
             links = load_links()
             links[key] = url
             # Renaming an existing shortcut: drop the old key.

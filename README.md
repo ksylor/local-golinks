@@ -102,6 +102,45 @@ the shortcut up in `links.json` and returns a `302` redirect; unknown paths fall
 through to the add form. The `go` hostname resolves to `127.0.0.1` via
 `/etc/hosts`, and `launchd` keeps the server running and starts it at boot.
 
+## Security
+
+This server has no login — it trusts whoever can reach `127.0.0.1`. A few
+protections and one thing to be aware of:
+
+**Built-in protections**
+
+- **Cross-site request forgery (CSRF).** Without this, any website you visited
+  could silently POST to `go/_add` and repoint a trusted shortcut (say `gmail`)
+  at a phishing page. State-changing requests are rejected unless they're
+  same-origin (checked via `Sec-Fetch-Site`, falling back to `Origin`/`Referer`).
+  Non-browser clients like `curl` are still allowed.
+- **DNS rebinding.** The server only answers to `Host: go`, `localhost`, or
+  `127.0.0.1`; a remote domain rebinding to `127.0.0.1` gets a `403`.
+- **Link scheme allowlist.** Stored links must be `http`, `https`, `mailto`, or
+  `ftp` (or root-relative). `javascript:`, `data:`, `file:`, etc. are rejected,
+  and control characters (which could split the redirect response) are refused.
+
+**Know this: the daemon runs as root.**
+
+Binding port 80 requires root, so the `launchd` daemon runs as `root`. That's
+fine on a single-user Mac (you already have admin), but note two consequences
+on a **shared / multi-user machine**:
+
+- `server.py` lives in your home directory but executes as root, so any user who
+  can write to that directory could get code to run as root at the next restart.
+- `links.json` is kept world-writable (`0666`) so you can hand-edit it despite
+  root ownership — meaning other local users could rewrite your links.
+
+If you're on a multi-user machine and care about this, you can:
+
+- keep the repo directory writable only by you (`chmod 700 .`), and/or
+- run without root instead: set `GOLINKS_PORT` to a value ≥ 1024, drop the
+  `sudo`/LaunchDaemon parts, and use a browser search keyword or a high-port URL
+  (you lose the bare `go/` hostname, but nothing runs as root).
+
+Nothing is ever exposed off your machine either way — the socket binds
+`127.0.0.1` only.
+
 ## Notes & caveats
 
 - Redirects are served over `http://` (not https) — fine for local hops.
