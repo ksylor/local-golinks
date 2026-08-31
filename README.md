@@ -1,5 +1,14 @@
 # local-golinks
 
+> ⚠️ **As-is, AI-generated, no guarantees.** This project was written almost
+> entirely by an AI assistant (Claude) and is shared **as-is**, with **no
+> warranty and no guarantees of any kind** — not of correctness, security,
+> fitness for any purpose, or ongoing maintenance. It has **not** been
+> professionally audited. It runs a web server as **root** on your machine (see
+> [Security](#security)). **Review the code yourself before installing, and use
+> it entirely at your own risk.** See [LICENSE](LICENSE) for the full disclaimer
+> of warranty and liability.
+
 Personal `go/` links for macOS. Type `go/gmail` in your browser and land on the
 URL you saved for it — the classic corporate go-links experience, but running
 entirely on your own machine. No account, no cloud, no browser extension.

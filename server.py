@@ -8,6 +8,12 @@ hand-editing the JSON store.
 
 No third-party dependencies -- Python 3 stdlib only.
 
+DISCLAIMER: This code was generated almost entirely by an AI assistant and is
+provided AS-IS, with NO WARRANTY OR GUARANTEE OF ANY KIND (correctness,
+security, or fitness for any purpose). It has not been professionally audited
+and runs a server as root. Review it yourself and use it at your own risk.
+See the LICENSE file for the full disclaimer.
+
 Environment:
   GOLINKS_DB    path to the JSON store (default: ./links.json next to this file)
   GOLINKS_HOST  bind address (default: 127.0.0.1)
