@@ -29,6 +29,7 @@ Otherwise any extra path after a matched shortcut is appended, so
 import html
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -37,12 +38,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+TEMPLATES_DIR = os.path.join(HERE, "templates")
 DB_PATH = os.environ.get("GOLINKS_DB", os.path.join(HERE, "links.json"))
 HOST = os.environ.get("GOLINKS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("GOLINKS_PORT", "80"))
 
 # Shortcuts that are reserved for the app itself and cannot be used as links.
-RESERVED = {"", "_edit", "_add", "_delete", "_api", "favicon.ico", "robots.txt"}
+RESERVED = {"", "_edit", "_add", "_delete", "_api", "_go", "favicon.ico", "robots.txt"}
 
 # Hostnames this server will answer to. Anything else (e.g. an attacker's
 # domain rebinding to 127.0.0.1) is refused, to blunt DNS-rebinding attacks.
@@ -137,46 +139,23 @@ def resolve(path):
     return None
 
 
-PAGE_STYLE = """
-:root { color-scheme: light dark; }
-* { box-sizing: border-box; }
-body { font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-       max-width: 820px; margin: 40px auto; padding: 0 20px;
-       color: #1a1a1a; background: #fff; }
-@media (prefers-color-scheme: dark) {
-  body { color: #e6e6e6; background: #16171a; }
-  input { background: #23252b; color: #e6e6e6; border-color: #3a3d45 !important; }
-  tr:hover td { background: #1e2024; }
-  code { background: #23252b; }
-  a { color: #6ea8fe; }
-}
-h1 { font-size: 22px; margin: 0 0 4px; }
-.sub { color: #888; margin: 0 0 24px; font-size: 13px; }
-form.add { display: flex; gap: 8px; margin: 0 0 24px; flex-wrap: wrap; }
-input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 7px; font: inherit; }
-input[name=key] { width: 160px; }
-input[name=url] { flex: 1; min-width: 220px; }
-button { padding: 8px 14px; border: 0; border-radius: 7px; font: inherit;
-         background: #2563eb; color: #fff; cursor: pointer; }
-button.del { background: transparent; color: #d33; padding: 4px 8px; }
-td.actions { white-space: nowrap; }
-td.actions form { display: inline; }
-a.edit { display: inline-block; padding: 4px 8px; color: #2563eb; text-decoration: none; }
-@media (prefers-color-scheme: dark) { a.edit { color: #6ea8fe; } }
-table { width: 100%; border-collapse: collapse; }
-th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
-     color: #999; border-bottom: 1px solid #ddd; padding: 6px 8px; }
-td { padding: 8px; border-bottom: 1px solid #eee; vertical-align: top; }
-@media (prefers-color-scheme: dark) { td, th { border-color: #2a2c31; } }
-td.key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
-td.url { word-break: break-all; }
-code { background: #f2f2f4; padding: 1px 5px; border-radius: 4px;
-       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-.empty { color: #999; padding: 24px 8px; }
-.bm { margin-top: 32px; font-size: 13px; color: #888; }
-.bm a { display: inline-block; padding: 6px 12px; border: 1px dashed #bbb;
-        border-radius: 7px; text-decoration: none; color: inherit; }
-"""
+_PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
+
+
+def render_template(name, **values):
+    """Fill {{name}} placeholders in templates/<name> from `values`.
+
+    Templates are read fresh each request so edits show up without a restart.
+    Substitution is a single pass (values are not re-scanned), so inserted
+    content can never expand into further placeholders -- callers are still
+    responsible for HTML-escaping any untrusted values they pass in.
+    Template names are fixed by the server (never user input), so there is no
+    path-traversal surface here.
+    """
+    with open(os.path.join(TEMPLATES_DIR, name), "r", encoding="utf-8") as f:
+        template = f.read()
+    return _PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), template)
+
 
 # A tiny "go" favicon (SVG) so a pinned tab is recognizable.
 FAVICON_SVG = (
@@ -220,43 +199,38 @@ def render_edit(prefill_key="", prefill_url="", message="", orig=""):
         if rows
         else "<p class='empty'>No links yet. Add your first one above.</p>"
     )
+    # Suggestions for the search box's native <datalist>. The URL is shown as
+    # the option's label hint; both fields are HTML-escaped.
+    options = "".join(
+        '<option value="{v}">{u}</option>'.format(v=html.escape(k), u=html.escape(links[k]))
+        for k in sorted(links)
+    )
     msg = "<p class='sub' style='color:#2563eb'>{}</p>".format(html.escape(message)) if message else ""
-    # If the shortcut is already filled (arriving from a missing link or an
-    # edit), focus the URL field so you can type/change the destination.
+    # Focus the search box on the plain page; once a shortcut is prefilled
+    # (missing link or edit), focus the add form's URL field instead.
+    plain = not prefill_key and not prefill_url
+    search_focus = " autofocus" if plain else ""
     focus_url = bool(prefill_key)
-    key_focus = "" if focus_url else " autofocus"
+    key_focus = "" if (focus_url or plain) else " autofocus"
     url_focus = " autofocus" if focus_url else ""
     orig_field = (
-        "\n  <input type=hidden name=orig value=\"{}\">".format(html.escape(orig)) if orig else ""
+        '\n  <input type=hidden name=orig value="{}">'.format(html.escape(orig)) if orig else ""
     )
-    save_label = "Update" if orig else "Save"
-    return """<!doctype html><html><head><meta charset=utf-8>
-<title>go/ links</title><meta name=viewport content="width=device-width,initial-scale=1">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<style>{style}</style></head><body>
-<h1>go/ links</h1>
-<p class=sub>{count} link{plural} &middot; stored in <code>{db}</code></p>
-{msg}
-<form class=add method=post action=/_add>{orig_field}
-  <input name=key placeholder="shortcut" value="{pk}"{key_focus} autocomplete=off>
-  <input name=url placeholder="https://..." value="{pu}"{url_focus} autocomplete=off>
-  <button type=submit>{save_label}</button>
-</form>
-{table}
-<p class=bm>Drag this to your bookmarks bar to add the current page:
-<a href="{bm}">+ go link</a></p>
-</body></html>""".format(
-        style=PAGE_STYLE,
-        count=len(links),
+    return render_template(
+        "edit.html",
+        style=render_template("style.css"),
+        count=str(len(links)),
         plural="" if len(links) == 1 else "s",
         db=html.escape(DB_PATH),
         msg=msg,
+        options=options,
+        search_focus=search_focus,
+        orig_field=orig_field,
         pk=html.escape(prefill_key),
         pu=html.escape(prefill_url),
         key_focus=key_focus,
         url_focus=url_focus,
-        orig_field=orig_field,
-        save_label=save_label,
+        save_label="Update" if orig else "Save",
         table=table,
         bm=html.escape(BOOKMARKLET, quote=True),
     )
@@ -301,6 +275,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
+    def _serve_shortcut(self, lookup, extra_query=""):
+        """Resolve `lookup` against the store and 302 to it. Returns True if a
+        redirect was sent, False if no matching shortcut exists."""
+        target = resolve(lookup)
+        if not target:
+            return False
+        if extra_query and "%s" not in target:
+            sep = "&" if "?" in target else "?"
+            target = target + sep + extra_query
+        # Refuse to emit a Location built from a tampered/hand-edited entry
+        # containing control chars (HTTP response-splitting guard).
+        if has_control_chars(target):
+            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Invalid redirect target")
+            return True
+        self._redirect(target)
+        return True
+
     def do_GET(self):
         if not self._host_ok():
             self.send_error(HTTPStatus.FORBIDDEN, "Invalid Host header")
@@ -343,6 +334,25 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(render_edit(prefill_url=unquote(url)))
             return
 
+        if first == "_go":
+            # Search-box submit: jump to the chosen/typed shortcut.
+            to = parse_qs(parsed.query).get("to", [""])[0].strip().strip("/")
+            if to and self._serve_shortcut(to):
+                return
+            # Empty -> plain form; unknown -> prefilled create form (never an
+            # open redirect: we only ever redirect to a stored shortcut).
+            if not to:
+                self._send_html(render_edit())
+            else:
+                self._send_html(
+                    render_edit(
+                        prefill_key=to,
+                        message="No link for '%s' yet — add it below." % to,
+                    ),
+                    status=HTTPStatus.NOT_FOUND,
+                )
+            return
+
         if first == "_api":
             data = json.dumps(load_links(), indent=2, sort_keys=True).encode("utf-8")
             self.send_response(HTTPStatus.OK)
@@ -352,19 +362,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
             return
 
-        # Otherwise, treat the path as a shortcut lookup.
-        target = resolve(path)
-        if target:
-            # Carry through any query string on the incoming request.
-            if parsed.query and "%s" not in target:
-                sep = "&" if "?" in target else "?"
-                target = target + sep + parsed.query
-            # Refuse to emit a Location built from a tampered/hand-edited entry
-            # containing control chars (HTTP response-splitting guard).
-            if has_control_chars(target):
-                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, "Invalid redirect target")
-                return
-            self._redirect(target)
+        # Otherwise, treat the path as a shortcut lookup (carrying the query).
+        if self._serve_shortcut(path, parsed.query):
             return
 
         # Unknown shortcut -> edit page prefilled so you can create it.

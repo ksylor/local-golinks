@@ -44,6 +44,9 @@ Then open <http://go/>.
 
 - **Follow a link:** type `go/gmail` in the address bar. Include the trailing
   `/` (or a shortcut) so the browser treats it as a URL, not a search.
+- **Search:** the box at the top of `go/` autocompletes your shortcuts via a
+  native `<datalist>` — start typing, pick a suggestion, and hit **Go** to jump
+  there. Works without JavaScript.
 - **Manage links:** open `go/` for the add / **edit** / **delete** form.
 - **Add the current page:** drag the **“+ go link”** button from `go/` to your
   bookmarks bar, then click it on any page to pre-fill the form.
@@ -106,10 +109,14 @@ GOLINKS_PORT=8899 python3 server.py
 
 ## How it works
 
-`server.py` is a ~300-line `http.server` app. A request to `/<shortcut>` looks
-the shortcut up in `links.json` and returns a `302` redirect; unknown paths fall
+`server.py` is a small `http.server` app. A request to `/<shortcut>` looks the
+shortcut up in `links.json` and returns a `302` redirect; unknown paths fall
 through to the add form. The `go` hostname resolves to `127.0.0.1` via
 `/etc/hosts`, and `launchd` keeps the server running and starts it at boot.
+
+The web UI lives in `templates/` (`edit.html` + `style.css`), filled in at
+request time by a tiny `{{placeholder}}` renderer — still no dependencies, and
+template edits show up on reload without restarting the server.
 
 ## Security
 

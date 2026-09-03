@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset=utf-8>
+<title>go/ links</title>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>{{style}}</style>
+</head>
+<body>
+<h1>go/ links</h1>
+<p class=sub>{{count}} link{{plural}} &middot; stored in <code>{{db}}</code></p>
+{{msg}}
+<form class=search method=get action=/_go role=search target=_blank rel=noopener>
+  <input name=to list=shortcuts placeholder="Jump to a link…"{{search_focus}}>
+  <button type=submit>Go</button>
+</form>
+<datalist id=shortcuts>{{options}}</datalist>
+<form class=add method=post action=/_add>{{orig_field}}
+  <input name=key placeholder="shortcut" value="{{pk}}"{{key_focus}} autocomplete=off>
+  <input name=url placeholder="https://..." value="{{pu}}"{{url_focus}} autocomplete=off>
+  <button type=submit>{{save_label}}</button>
+</form>
+{{table}}
+<p class=bm>Drag this to your bookmarks bar to add the current page:
+<a href="{{bm}}">+ go link</a></p>
+</body>
+</html>
